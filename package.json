@@ -1,5 +1,5 @@
 {
-  "name": "strong-error-handler",
+  "name": "@xompass/error-handler",
   "description": "Error handler for use in development and production environments.",
   "license": "MIT",
   "version": "5.0.29",
@@ -9,7 +9,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/loopbackio/strong-error-handler.git"
+    "url": "https://github.com/xompass/strong-error-handler"
   },
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -32,9 +32,13 @@
     "fmt": "oxfmt .",
     "lint": "oxlint src test",
     "prepack": "npm run build",
+    "prepublishOnly": "npm run typecheck && npm run lint && npm test",
     "prepare": "npm run build",
     "test": "npm run build && vitest run",
     "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org/"
   },
   "dependencies": {
     "accepts": "^1.3.8",

@@ -1,18 +1,23 @@
-# strong-error-handler
+# @xompass/error-handler
 
 HTTP error writer for Express and LoopBack 3 style applications.
 
-This fork is intentionally small:
+`@xompass/error-handler` is a fork of `strong-error-handler`. The goal of this fork is to stay compatible with the original package for the common LoopBack 3 / Strong Remoting use cases, while making the codebase smaller and easier to maintain.
 
-- TypeScript source, build output in `dist/`
+Compared with the upstream package, this fork intentionally removes a number of legacy concerns:
+
+- TypeScript source with build output in `dist/`
 - English-only messages
 - No i18n catalogs or `strong-globalize`
+- Several legacy files and dependencies removed
 - Modern tooling with `tsdown`, `vitest`, and `oxlint`
+
+The public behavior is still meant to be familiar for applications that already depended on `strong-error-handler`, but the internals were simplified on purpose to reduce maintenance overhead.
 
 ## Installation
 
 ```bash
-npm install strong-error-handler
+npm install @xompass/error-handler
 ```
 
 ## Usage
@@ -21,7 +26,7 @@ npm install strong-error-handler
 
 ```js
 const express = require('express');
-const errorHandler = require('strong-error-handler');
+const errorHandler = require('@xompass/error-handler');
 
 const app = express();
 
@@ -34,7 +39,7 @@ app.use(errorHandler({
 ### Direct response writer
 
 ```js
-const errorHandler = require('strong-error-handler');
+const errorHandler = require('@xompass/error-handler');
 
 errorHandler.writeErrorToResponse(
   new Error('something went wrong'),

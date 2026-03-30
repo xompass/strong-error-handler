@@ -8,6 +8,6 @@ export default defineConfig({
   format: 'cjs',
   outDir: 'dist',
   platform: 'node',
-  sourcemap: true,
+  sourcemap: false,
   target: 'node20',
 });
