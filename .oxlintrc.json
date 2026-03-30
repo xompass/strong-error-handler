@@ -1,0 +1,22 @@
+{
+  "plugins": [
+    "typescript",
+    "node",
+    "vitest"
+  ],
+  "ignorePatterns": [
+    "dist/",
+    "node_modules/"
+  ],
+  "categories": {
+    "correctness": "error",
+    "suspicious": "error",
+    "pedantic": "off",
+    "style": "off"
+  },
+  "rules": {
+    "jest/valid-expect": "off",
+    "jest/valid-title": "off",
+    "jest/no-standalone-expect": "off"
+  }
+}

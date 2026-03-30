@@ -3,20 +3,35 @@
 // This file is licensed under the MIT License.
 // License text available at https://opensource.org/licenses/MIT
 
-import cloneAllProperties from '../lib/clone.js';
 import debugFactory from 'debug';
-import express from 'express';
-import strongErrorHandler from '../lib/handler.js';
 import supertest from 'supertest';
+import domain from 'node:domain';
+import http from 'node:http';
 import util from 'node:util';
-import {expect} from 'chai';
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it as vitestIt,
+} from 'vitest';
+
+import strongErrorHandler from '../dist/index.js';
 
 const debug = debugFactory('test');
+const context = describe;
+const it = wrapDoneTest(vitestIt);
 
 describe('strong-error-handler', function() {
-  before(setupHttpServerAndClient);
+  beforeAll(async function() {
+    await setupHttpServerAndClient();
+  });
   beforeEach(resetRequestHandler);
-  after(stopHttpServerAndClient);
+  afterAll(function() {
+    stopHttpServerAndClient();
+  });
 
   it('sets nosniff header', function(done) {
     givenErrorHandlerForError();
@@ -39,6 +54,14 @@ describe('strong-error-handler', function() {
   });
 
   context('status code', function() {
+    it('handles null error values', function(done) {
+      givenErrorHandlerForError(null, {debug: true});
+      request.get('/').expect(500, {error: {
+        statusCode: 500,
+        message: 'null',
+      }}, done);
+    });
+
     it('converts non-error "err.status" to 500', function(done) {
       givenErrorHandlerForError(new ErrorWithProps({status: 200}));
       request.get('/').expect(500, done);
@@ -137,7 +160,7 @@ describe('strong-error-handler', function() {
         // the error name & message
         expect(msg).to.contain('TypeError: ERROR-NAME');
         // the stack
-        expect(msg).to.contain(import.meta.url);
+        expect(msg).to.contain('handler.test.mjs');
         done();
       });
     });
@@ -160,7 +183,7 @@ describe('strong-error-handler', function() {
         expect(msg).to.contain('TypeError: ERR1');
         expect(msg).to.contain('Error: ERR2');
         // verify that stacks are included too
-        expect(msg).to.contain(import.meta.url);
+        expect(msg).to.contain('handler.test.mjs');
 
         done();
       });
@@ -566,6 +589,29 @@ describe('strong-error-handler', function() {
         done();
       });
     });
+
+    it('does not treat repeated objects as circular when not recursive',
+      function(done) {
+        const sharedObject = {nested: 'value'};
+        const error = new ErrorWithProps({
+          statusCode: 422,
+          message: 'The model instance is not valid.',
+          name: 'ValidationError',
+          code: 'VALIDATION_ERROR',
+          details: {
+            first: sharedObject,
+            second: sharedObject,
+          },
+        });
+
+        givenErrorHandlerForError(error, {debug: true});
+        requestJson().end(function(err, res) {
+          if (err) return done(err);
+          expect(res.body.error.details.first).to.eql({nested: 'value'});
+          expect(res.body.error.details.second).to.eql({nested: 'value'});
+          done();
+        });
+      });
 
     it('honors rootProperty', function(done) {
       givenErrorHandlerForError('Error Message', {rootProperty: 'data'});
@@ -1027,6 +1073,40 @@ describe('strong-error-handler', function() {
       done();
     });
   });
+
+  it('supports writeErrorToResponse with plain Node response objects',
+    function() {
+      const headers = {};
+      let endedBody;
+      const req = {
+        headers: {accept: 'application/json'},
+        method: 'GET',
+        query: {_format: 'unknown'},
+        socket: {destroy() {}},
+        url: '/',
+      };
+      const res = {
+        headersSent: false,
+        statusCode: 200,
+        end(body) {
+          endedBody = body;
+        },
+        setHeader(name, value) {
+          headers[name] = value;
+        },
+      };
+
+      strongErrorHandler.writeErrorToResponse(
+        new Error('plain response'),
+        req,
+        res,
+        {rootProperty: false},
+      );
+
+      expect(headers['X-Warning']).toMatch(/_format/);
+      expect(headers['Content-Type']).toMatch(/^application\/json/);
+      expect(endedBody).toContain('Internal Server Error');
+    });
 });
 
 let app, _requestHandler, request, server;
@@ -1035,7 +1115,9 @@ function resetRequestHandler() {
 }
 
 function givenErrorHandlerForError(error, options) {
-  if (!error) error = new Error('an error');
+  if (arguments.length === 0 || error === undefined) {
+    error = new Error('an error');
+  }
 
   if (!options) options = {};
   if (!('log' in options)) {
@@ -1052,45 +1134,92 @@ function givenErrorHandlerForError(error, options) {
   };
 }
 
-function setupHttpServerAndClient(done) {
-  app = express();
-  app.use(function(req, res, next) {
-    if (!_requestHandler) {
-      const msg = 'Error handler middleware was not setup in this test';
-      console.error(msg);
-      res.statusCode = 500;
-      res.setHeader('Content-Type', 'text/plain; charset=utf-8');
-      res.end(msg);
-      return;
+function wrapDoneTest(registerTest) {
+  return function registerDoneTest(name, testFn) {
+    if (typeof testFn !== 'function' || testFn.length === 0) {
+      return registerTest(name, testFn);
     }
 
-    _requestHandler(req, res, warnUnhandledError);
+    return registerTest(name, function() {
+      return new Promise(function(resolve, reject) {
+        let settled = false;
+        const errorDomain = domain.create();
 
-    function warnUnhandledError(err) {
-      console.log('unexpected: strong-error-handler called next with',
-        (err && (err.stack || err)) || 'no error');
-      res.statusCode = 500;
-      res.setHeader('Content-Type', 'text/plain; charset=utf-8');
-      res.end(err ?
-        'Unhandled strong-error-handler error:\n' + (err.stack || err) :
-        'The error was silently discared by strong-error-handler');
-    }
-  });
+        function done(error) {
+          if (settled) {
+            return;
+          }
 
-  server = app.listen(0, function() {
-    const url = 'http://127.0.0.1:' + this.address().port;
-    debug('Test server listening on %s', url);
-    request = supertest(app);
-    done();
-  })
-    .once('error', function(err) {
-      debug('Cannot setup HTTP server: %s', err.stack);
-      done(err);
+          settled = true;
+          if (error) {
+            reject(error);
+            return;
+          }
+
+          resolve();
+        }
+
+        errorDomain.on('error', done);
+        errorDomain.run(function() {
+          try {
+            testFn(done);
+          } catch (error) {
+            done(error);
+          }
+        });
+      });
     });
+  };
+}
+
+function setupHttpServerAndClient() {
+  return new Promise(function(resolve, reject) {
+    app = function(req, res) {
+      const requestUrl = new URL(req.url || '/', 'http://127.0.0.1');
+      req.query = Object.fromEntries(requestUrl.searchParams.entries());
+
+      if (!_requestHandler) {
+        const msg = 'Error handler middleware was not setup in this test';
+        console.error(msg);
+        res.statusCode = 500;
+        res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+        res.end(msg);
+        return;
+      }
+
+      _requestHandler(req, res, warnUnhandledError);
+
+      function warnUnhandledError(err) {
+        console.log('unexpected: strong-error-handler called next with',
+          (err && (err.stack || err)) || 'no error');
+        res.statusCode = 500;
+        res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+        res.end(err ?
+          'Unhandled strong-error-handler error:\n' + (err.stack || err) :
+          'The error was silently discared by strong-error-handler');
+      }
+    };
+
+    server = http.createServer(app);
+    server.listen(0, function() {
+      const address = server.address();
+      const port = typeof address === 'object' && address ? address.port : 0;
+      const url = 'http://127.0.0.1:' + port;
+      debug('Test server listening on %s', url);
+      request = supertest(server);
+      resolve();
+    });
+    server.once('error', function(err) {
+      debug('Cannot setup HTTP server: %s', err.stack);
+      reject(err);
+    });
+  });
 }
 
 function stopHttpServerAndClient() {
-  server.close();
+  if (server) {
+    server.close();
+  }
 }
 
 function ErrorWithProps(props) {
@@ -1107,7 +1236,16 @@ function ErrorWithProps(props) {
 util.inherits(ErrorWithProps, Error);
 
 function getExpectedErrorData(err) {
-  const data = {};
-  cloneAllProperties(data, err);
+  const data = {
+    name: err.name,
+    message: err.message,
+  };
+
+  for (const key in err) {
+    if (key in data) continue;
+    data[key] = err[key];
+  }
+
+  data.stack = err.stack;
   return data;
 }
